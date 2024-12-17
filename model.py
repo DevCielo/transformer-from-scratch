@@ -85,3 +85,66 @@ class PositionalEncoding(nn.Module):
         x = x + (self.pe[:, :x.shape[1], :]).requires_grad_(False)
         return self.dropout(x)
 
+'''
+Layer Normalization standardizes inputs along feature dimension. Helps to ensure inputs to a layer have
+consistent distribution, which improves convergence during training. Helps gradients flow more smoothly avoiding
+vanishing/exploding gradients.
+
+eps: A small value added to the denominator to avoid division by zero.
+alpha: Trainable param initialized to 1. Used to scale normalized output.
+bias: Trainable param initialized to 0. Used to shift normalized output.
+
+Bias + alpha allow model to learn an affine transformation of the normalized input.
+
+EXAMPLE WALKTHROUGH:
+x = [[1, 2, 3], [4, 5, 6]]
+For first row:
+mean = 2
+s.d. = 0.8165
+
+Normalized: (x - mean) / (s.d. + bias) = [-1.2247, 0, 1.2247]
+y = alpha * (x - mean) / (s.d. + bias) + bias = [-1.2247, 0, 1.2247]
+'''
+class LayerNormalization(nn.Module):
+
+    def __init__(self, eps: float = 10**-6) -> None:
+        super().__init__()
+        self.eps = eps
+        self.alpha = nn.Parameter(torch.ones(1)) # Multiplied
+        self.bias = nn.Parameter(torch.zeros(1)) # Added
+
+    def forward(self, x):
+        mean = x.mean(dim = -1, keepdim=True)
+        std = x.std(dim = 1, keepdim=True)
+        return self.alpha * (x - mean) / (std + self.eps) + self.bias
+
+'''
+Feed Fowards Block introduces non-linearity and transformation after attention layers
+in transformer. Consists of two fully connected layers (Linear) and an activation function (ReLU)
+and dropout for regularization.
+
+Formula looks like:
+FFN(x)=Linear(Dropout(ReLU(Linear(x))))
+
+EXAMPLE WALKTHROUGH:
+Operation	Input Shape	                Output Shape
+Input	    (Batch, Seq_Len, d_model)	(Batch, Seq_Len, d_model)
+linear_1	(Batch, Seq_Len, d_model)	(Batch, Seq_Len, d_ff)
+ReLU	    (Batch, Seq_Len, d_ff)	    (Batch, Seq_Len, d_ff)
+Dropout	    (Batch, Seq_Len, d_ff)	    (Batch, Seq_Len, d_ff)
+linear_2	(Batch, Seq_Len, d_ff)	    (Batch, Seq_Len, d_model)
+
+'''
+class FeedForwardBlock(nn.Module):
+
+    def __init__(self, d_model: int, d_ff: int, dropout: float) -> None:
+        super().__init__()
+        # output1 = W1 * x + B1
+        self.linear_1 = nn.Linear(d_model, d_ff) # W1 and B1
+        self.dropout = nn.Dropout(dropout) # Randomly sets some elements of tensor to 0 to prevent overfitting.
+        # output2 = W2 * ReLU(output1) + B2
+        self.linear_2 = nn.Linear(d-ff, d_model) # W2 and B2
+
+    def forward(self, x):
+        # (Batch, Seq_Len, d_model) --> (Batch, Seq_Len, d_ff) --> (Batch, Seq_Len, d_model)
+        return self.linear_2(self.dropout(torch.relu(self.linear_1(x))))
