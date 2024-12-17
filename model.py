@@ -39,3 +39,49 @@ class InputEmbeddings(nn.Module):
     def forward(self, x):
         # self.embedding replaces each token ID with its corresponding vector
         return self.embedding(x) * math.srqt(self.d_model) # multiple the weights by sqrt(d_model)
+
+'''
+Positional Encoding is used to add positional information to the input sequence. It allows the model to
+understand the order and relative position of tokens in the sequence, which is important for tasks like
+language modeling and machine translation.
+
+d_model: Dimension of embedding vector. Every token will be represented as a vector of length d_model.
+seq_len: The maximum sequence length. The number of positions for which positional encodings are generated.
+dropout: Dropout rate to apply to the positional encodings to avoid overfitting.
+
+EXAMPLE WALKTHROUGH:
+seq_len = 10, d_model = 6.
+Input tensor x has shape: [batch_size=2, seq_len=10, d_model=6]
+
+Shape of PE is [1, seq_len=10, d_model=6]
+
+Adds PE to the input x element_wise
+Ouput has the same shape as x
+'''
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, seq_len: int, dropout: float) -> None:
+        super().__init__()
+        self.d_model = d_model
+        self.seq_len = seq_len
+        self.dropout = nn.Dropout(dropout)
+
+        # Create a matrix of shape (seq_len, d_model) filled with zeros. Stores positional encodings for each position.
+        pe = torch.zeros(seq_len, d_model)
+        # Create a vector of shape (seq_len, 1) with values [0, 1, 2, ..., seq_len - 1] (in 1 column). Each row corresponds to a position in the sequence.
+        position = torch.arange(0, seq_len, dtype=torch.float).unsqueeze(1) # .unsqueeze(1) essentially makes it a column vector.
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        # Apply the sin to even positions
+        pe[:, 0::2] = torch.sin(position * div_term)
+        # Apply the cos to odd positions
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        pe = pe.unsqueeze(0) # (1, seq_len, d_model) allows positional encoding matrix to be added to inputs of shape [batch_size, seq_len, d_model]
+
+        # Buffers are saved with the model but are not updated during training.
+        self.register_buffer('pe', pe)
+    
+    def forward(self, x):
+        # Ensures positional encodings match sequence length of input tensor and are not trainable.
+        x = x + (self.pe[:, :x.shape[1], :]).requires_grad_(False)
+        return self.dropout(x)
+
