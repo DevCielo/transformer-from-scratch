@@ -148,3 +148,90 @@ class FeedForwardBlock(nn.Module):
     def forward(self, x):
         # (Batch, Seq_Len, d_model) --> (Batch, Seq_Len, d_ff) --> (Batch, Seq_Len, d_model)
         return self.linear_2(self.dropout(torch.relu(self.linear_1(x))))
+
+
+'''
+Multihead attention allows models to focus on different parts of sequences (or multiple sequences) 
+simultaneously by using multiple attention heads. It processes queries, keys, and values and calculates
+attention over the sequence.
+
+Query (Q): What we are searching for
+Key (K): What we are comparing against
+Value (V): Information extracted
+
+Attention computs a weighted sum of values based on similarity between queries and keys.
+Similarity measured using dot product between query and key, scaled by sqrt(dk).
+
+Instead of single attention. Embedding space is split into h heads, 
+compute attention sperately for each head then combine results.
+
+EXAMPLE WALKTHROUGH:
+Assume:
+Batch = 2, Seq_Len = 5, d_model = 512, h = 8
+
+Step	                    Shape
+Input (q, k, v)	            (2, 5, 512)
+After w_q, w_k, w_v	        (2, 5, 512)
+Reshape for multi-head	    (2, 5, 8, 64) → (2, 8, 5, 64)
+Attention scores	        (2, 8, 5, 5)
+Weighted sum (x)	        (2, 8, 5, 64)
+Combine heads (transpose)	(2, 5, 8, 64) → (2, 5, 512)
+Final output (w_o(x))	    (2, 5, 512)
+'''
+class MultiHeadAttentionBlock(nn.Module):
+
+    def __init(self, d_model: int, h: int, dropout: float) -> None:
+        super().__init__()
+        self.d_model = d_model
+        self.h = h # number of attention heads
+        assert d_model % h == 0, "d_model must be divisible by h"
+
+        self.d_k = d_model // h # dimension of each attention head
+        self.w_q = nn.Linear(d_model, d_model) #Wq
+        self.w_k = nn.Linear(d_model, d_model) #Wk
+        self.w_v = nn.Linear(d_model, d_model) #Wv
+
+        self.w_o = nn.Linear(d_model, d_model) # Combines all attention heads back into original dimensions.
+        self.dropout = nn.Dropout(dropout)
+
+    @staticmethod
+    def attention(query, key, value, mask, dropout: nn.Dropout):
+        d_k = query.shape[-1]
+        
+        # (Batch, h, Seq_Len, d_k) --> (Batch, h, Seq_Len, Seq_Len)
+        attention_scores = (query @ key.transpose(-2, -1)) / math.sqrt(d_k)
+
+        # Masking is used to prevent attetion to certain positions (e.g. padding tokens or future tokens)
+        if mask is not None:
+            # masked_fill_ replaces masked positions with -infinity, making softmax values 0.
+            attention_scores.masked_fill_(mask == 0, -1e9)
+        # Normalizes attention scores to sum to 1 across sequence length
+        attention_scores = attention_scores.softmax(dim = -1) # (Batch, h, Seq_Len, Seq_Len)
+
+        if dropout is not None:
+            attention_scores = dropout(attention_scores)
+
+        return (attention_scores @ value), attention_scores
+
+    # Mask is a tensor of shape (batch_size, seq_len, seq_len)
+    def forward(self, q, k, v, mask):
+        query = self.w_q(q) # (Batch, Seq_Len, d_model) --> (Batch, Seq_Len, d_model)
+        key = self.w_k(k) # (Batch, Seq_Len, d_model) --> (Batch, Seq_Len, d_model)
+        value = self.w_v(v) # (Batch, Seq_Len, d_model) --> (Batch, Seq_Len, d_model)
+
+        # (Batch, Seq_Len, d_model) --> (Batch, Seq_Len, h, d_k) --> (Batch, h, Seq_Len, d_k)
+        # Split embedding space into h heads by reshaping.
+        query = query.view(query.shape[0], query.shape[1], self.h, self.d_k).transpose(1, 2)
+        key = key.view(key.shape[0], key.shape[1], self.h, self.d_k).transpose(1, 2)
+        value = value.view(value.shape[0], value.shape[1], self.h, self.d_k).transpose(1, 2)
+
+        # Calls attention method to compute weighted sums and attention scores.
+        x, self.attention_scores = MultiHeadAttentionBlock.attention(query, key, value, mask, self.dropout)
+
+        # (Batch, h, Seq_Len, d_k) --> (Batch, Seq_Len, h, d_k) --> (Batch, Seq_Len, d_model)
+        # Combine attention heads
+        x = x.transpose(1, 2).contiguous().view(x.shape[0], -1, self.h * self.d_k)
+
+        # (Batch, seq_len, d_model) --> (Batch, seq_len, d_model)
+        return self.w_o(x)
+
