@@ -235,3 +235,68 @@ class MultiHeadAttentionBlock(nn.Module):
         # (Batch, seq_len, d_model) --> (Batch, seq_len, d_model)
         return self.w_o(x)
 
+'''
+A residual connection adds the input x of a layer directly to its output sublayer(x). 
+Helps address problems like vanishing gradient and allows deeper models to be trained effectively.
+
+Residual connections are combined with layer normalization to stabilize training.
+
+Essentially creates a skip connection by allowing the origina input to a layer to be added 
+to its output.
+'''
+class ResidualConnection(nn.Module):
+
+    def __init__(self, dropout: float) -> None:
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+        self.norm = LayerNormalization()
+
+    def forward(self, x, sublayer):
+        #  Normalizes input to sublayer then applies dropout and adds this to the input (giving like a skip connection)
+        return x + self.dropout(sublayer(self.norm(x)))
+
+'''
+Encoder block represents a single layer in the transformer encoder. It consists of a 
+multi-head self-attention clock, a feed-forward block, and two residual connections.
+
+The first residual connection is between the self-attention block and its input.
+The second is between the feed-forward block and its input.
+
+In the forward pass. The residual connection normalizes x before passing it to self-attention block.
+x is used as Q, K, V in the attention mechanism. src_mask ensures attention is restricted to valid positions.
+The original x is added to the output of the self-attention block.
+
+The x is normalized before passing into feed-forward block. 
+A non-linear transformation is independently applied to each position in x.
+Added original x to the output of feed-forward block.
+'''
+class EncoderBlock(nn.Module):
+
+    def __init__(self, self_attention_block: MultiHeadAttentionBlock, feed_forward_block: FeedForwardBlock, dropout: float) -> None:
+        super().__init__()
+        self.self_attention_block = self_attention_block
+        self.feed_forward_block = feed_forward_block
+        # Creates a module list of size 2
+        self.residual_connections = nn.ModuleList([ResidualConnection(dropout) for _ in range(2)])
+
+    def forward(self, x, src_mask):
+        # the first position is a residual connection between the multi-head attention block and the input.
+        x = self.residual_connections[0](x, lambda x: self.self_attention_block(x, x, x, src_mask)) 
+        # the second position is a connection between the feed forward block and the input.
+        x = self.residual_connections[1](x, self.feed_forward_block)
+        return x
+'''
+Consists of multiple encoder blocks stacked together with a final layer normalization at the end.
+Essentially represents the entire transformer code.
+'''
+class Encoder(nn.Module):
+
+    def __init__(self, layers: nn.ModuleList) -> None:
+        super().__init__()
+        self.layers = layers
+        self.norm = LayerNormalization()
+
+    def forward(self, x, mask):
+        for layer in self.layers:
+            x = layer(x, mask) 
+        return self.norm(x) 
