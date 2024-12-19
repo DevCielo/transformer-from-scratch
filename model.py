@@ -27,7 +27,6 @@ x = [[5, 123, 10]] (sequence of 3 words)
 output is a tensor of shape [1, 3, 512] (Each word in sequence gets respresented as vector of size 512).
 Embedding values are scaled by sqrt(512)
 '''
-
 class InputEmbeddings(nn.Module):
 
     def __init__(self, d_model: int, vocab_size: int):
@@ -338,3 +337,109 @@ class Decoder(nn.Module):
         for layer in self.layers:
             x = layer(x, encoder_output, src_mask, tgt_mask)
         return self.norm(x)
+
+'''
+Maps the final output of the transformer decoder to a probability distribution over the target vocabulary.
+Enabling it to predict the next token in a sqeuence.
+
+It maps the model's output embeddings of size d_model to logits of size vocab_size. Each position in the
+sequence will output a vector representing the proabilities of each token in the vocabulary.
+
+The log softmax converts the logits into log-probabilities over the vocabulary.
+
+The linear layer learns a weight matrix W of size (vocab_size, d_model) and a bias vector b of size vocab_size
+'''
+class ProjectionLayer(nn.Module):
+
+    def __init__(self, d_model: int, vocab_size: int ) -> None:
+        super().__init__()
+        self.proj = nn.Linear(d_model, vocab_size)
+
+    def forward(self, x):
+        # (Batch, seq_len, d_model) --> (batch, seq_len, vocab_size)
+        return torch.log_softmax(self.proj(x), dim = -1) # dim = -1 ensures softmax is applied to last dimension (vocab_size)
+
+'''
+Complete implementation of the transformer architecture combining the encoder and decoder with 
+embeddings, positional encodings and a projection layer for generating predictions.
+'''
+class Transformer(nn.Module):
+
+    def __init__(self, encoder: Encoder, decoder: Decoder, src_embed: InputEmbeddings, tgt_embed: InputEmbeddings, src_pos: PositionalEncoding, tgt_pos: PositionalEncoding, projection_layer: ProjectionLayer) -> None:
+        super().__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+        self.src_embed = src_embed
+        self.tgt_embed = tgt_embed
+        self.src_pos = src_pos
+        self.tgt_pos = tgt_pos
+        self.projection_layer = projection_layer
+
+    def encode(self, src, src_mask):
+        src = self.src_embed(src) # Converts token indices to embedding vectors of size d_model
+        src = self.src_pos(src) # Adds positional information to the embeddings
+        return self.encoder(src, src_mask) # Processes the embeddings and produces a sequence of hidden states of shape (Batch, seq_len, d_model)
+
+    def decode(self, encoder_output, src_mask, tgt, tgt_mask):
+        tgt = self.tgt_embed(tgt) # Converts target token indices to embedding vectors of size d_model
+        tgt = self.tgt_pos(tgt) # Adds positional information to the embeddings
+        return self.decoder(tgt, encoder_output, src_mask, tgt_mask) # Processes embeddings + encoder output, applying self-attention and cross-attention.
+
+    # Maps decoder's output to a distribution over the target vocabulary.
+    def project(self, x):
+        return self.projection_layer(x)
+
+'''
+Helper function to construct a transformer model with specified params.
+
+src_vocab_size/tgt_vocab_size: Size of the source/target vocabulary.
+src_seq_len/tgt_seg_len: Length of the source/target sequence.
+d_model: Dimension of the embedding vector.
+N: Number of layers in the encoder and decoder.
+h: Number of attention heads in the multi-head attention blocks
+dropout: Dropout probability.
+d_ff: Dimension of the feed-forward block
+'''
+def build_transformer(src_vocab_size: int, tgt_vocab_size: int, src_seq_len: int, tgt_seg_len: int, d_model: int = 512, N: int = 6, h: int = 8, dropout: float = 0.1, d_ff: int = 2048) -> Transformer:
+    # Create embedding layers
+    src_embed = InputEmbeddings(d_model, src_vocab_size)
+    tgt_embed = InputEmbeddings(d_model, tgt_vocab_size)
+
+    # Create the positional encoding layers
+    src_pos = PositionalEncoding(d_model, src_seq_len, dropout)
+    tgt_pos = PositionalEncoding(d_model, tgt_seg_len, dropout)
+
+    # Create the encoder blocks
+    encoder_blocks = []
+    for _ in range(N):
+        encoder_self_attention_block = MultiHeadAttentionBlock(d_model, h, dropout)
+        feed_forward_block = FeedForwardBlock(d_model, d_ff, dropout)
+        encoder_block = EncoderBlock(encoder_self_attention_block, feed_forward_block, dropout)
+        encoder_blocks.append(encoder_block)
+
+    # Create the decoder blocks
+    decoder_blocks = []
+    for _ in range(N):
+        decoder_self_attention_block = MultiHeadAttentionBlock(d_model, h, dropout)
+        decoder_cross_attention_block = MultiHeadAttentionBlock(d_model, h, dropout)
+        feed_forward_block = FeedForwardBlock(d_model, d_ff, dropout)
+        decoder_block = DecoderBlock(decoder_self_attention_block, decoder_cross_attention_block, feed_forward_block, dropout)
+        decoder_blocks.append(decoder_block)
+
+    # Create the encoder and the decoder
+    encoder = Encoder(nn.ModuleList(encoder_blocks))
+    decoder = Decoder(nn.ModuleList(decoder_blocks))
+
+    # Create the projection layer
+    projection_layer = ProjectionLayer(d_model, tgt_vocab_size)
+
+    # Create the transformer
+    transformer = Transformer(encoder, deocder, src_embed, tgt_embed, src_pos, tgt_pos, projection_layer)
+
+    # Initialize the parameters of the transformer
+    for p in transformer.parameters():
+        if p.dim() > 1:
+            # Xavier initialization is a method that initializes the parameters of a layer using a distribution that is similar to a normal distribution.
+            nn.init.xavier_uniform_(p)
+
+    return transformer
